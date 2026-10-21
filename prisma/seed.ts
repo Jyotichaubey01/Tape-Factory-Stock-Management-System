@@ -1,7 +1,17 @@
 import { PrismaClient, Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
-const prisma = new PrismaClient();
+const datasourceUrl = process.env.MYSQL_DATABASE_URL || process.env.DATABASE_URL;
+
+const prisma = new PrismaClient({
+  datasources: datasourceUrl
+    ? {
+        db: {
+          url: datasourceUrl,
+        },
+      }
+    : undefined,
+});
 
 async function main() {
   console.log("Starting database seed...");
