@@ -67,8 +67,14 @@ export async function POST(req: NextRequest) {
     return response;
   } catch (error: any) {
     console.error("Login error:", error);
+    let errorMessage = error.message || "Internal server error";
+
+    if (errorMessage.includes("Authentication failed against database server") || errorMessage.includes("provided database credentials")) {
+      errorMessage = "Database Connection Error: Aiven MySQL credentials not configured yet. Please open your local .env file, replace 'REPLACE_WITH_AIVEN_PASSWORD' with your actual Aiven password, and run 'npx prisma db push && npm run prisma:seed'.";
+    }
+
     return NextResponse.json(
-      { error: error.message || "Internal server error" },
+      { error: errorMessage },
       { status: 500 }
     );
   }
