@@ -3,19 +3,20 @@ import { prisma } from "./prisma";
 export async function checkIdempotency(key: string, route: string, requestPayload: any) {
   if (!key) return null;
 
-  const existing = await prisma.idempotencyKey.findUnique({
-    where: { key },
-  });
+  try {
+    const existing = await prisma.idempotencyKey.findUnique({
+      where: { key },
+    });
 
-  if (existing) {
-    if (new Date() > existing.expiresAt) {
-      await prisma.idempotencyKey.delete({ where: { key } });
-      return null;
+    if (existing && existing.result) {
+      const data = existing.result as any;
+      return {
+        status: data.status || 200,
+        body: data.body || data,
+      };
     }
-    return {
-      status: existing.responseStatus,
-      body: JSON.parse(existing.responseBody),
-    };
+  } catch (e) {
+    console.error("Idempotency lookup error:", e);
   }
 
   return null;
@@ -27,28 +28,21 @@ export async function saveIdempotency(
   requestPayload: any,
   responseStatus: number,
   responseBody: any,
-  userId: string
+  userId: string | number
 ) {
   if (!key) return;
-
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
   try {
     await prisma.idempotencyKey.upsert({
       where: { key },
       update: {
-        responseStatus,
-        responseBody: JSON.stringify(responseBody),
-        expiresAt,
+        operation: route,
+        result: { status: responseStatus, body: responseBody },
       },
       create: {
         key,
-        route,
-        requestHash: typeof requestPayload === "string" ? requestPayload : JSON.stringify(requestPayload),
-        responseStatus,
-        responseBody: JSON.stringify(responseBody),
-        userId,
-        expiresAt,
+        operation: route,
+        result: { status: responseStatus, body: responseBody },
       },
     });
   } catch (e) {

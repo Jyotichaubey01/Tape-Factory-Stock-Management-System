@@ -7,304 +7,328 @@ datasource db {
   url      = env("MYSQL_DATABASE_URL")
 }
 
+model User {
+  id                   Int                   @id @default(autoincrement())
+  name                 String                @db.VarChar(100)
+  email                String                @unique
+  passwordHash         String                @db.VarChar(255)
+  role                 Role
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  audit_logs           AuditLog[]
+  cancellations        Cancellation[]
+  correction_records   CorrectionRecord[]
+  customers            Customer[]
+  dispatches           Dispatch[]
+  finishedGoodsLedgers FinishedGoodsLedger[]
+  materialLedgers      MaterialLedger[]
+  material_receipts    material_receipts[]
+  order_reservations   OrderReservation[]
+  production_batches   ProductionBatch[]
+  sales_orders         SalesOrder[]
+  sessions             sessions[]
+
+  @@index([role])
+  @@map("users")
+}
+
+model TapeSpecification {
+  id                   Int                   @id @default(autoincrement())
+  code                 String                @unique @db.VarChar(32)
+  widthMm              Decimal               @db.Decimal(12, 4)
+  filmGsm              Decimal               @db.Decimal(12, 4)
+  dryAdhesiveGsm       Decimal               @db.Decimal(12, 4)
+  solidsPercent        Decimal               @db.Decimal(8, 4)
+  rollLengthM          Decimal               @db.Decimal(14, 4)
+  createdAt            DateTime              @default(now())
+  finishedGoodsLedgers FinishedGoodsLedger[]
+  productionBatches    ProductionBatch[]
+  salesOrders          SalesOrder[]
+
+  @@index([createdAt])
+  @@map("tape_specifications")
+}
+
+model MaterialLedger {
+  id                                                                      Int                      @id @default(autoincrement())
+  material                                                                material_ledger_material
+  type                                                                    material_ledger_type
+  quantity                                                                Decimal                  @db.Decimal(18, 6)
+  reference                                                               String                   @db.VarChar(100)
+  reason                                                                  String?                  @db.VarChar(300)
+  userId                                                                  Int
+  batchId                                                                 Int?
+  createdAt                                                               DateTime                 @default(now())
+  correction_records_correction_records_materialLedgerIdTomaterial_ledger CorrectionRecord?        @relation("correction_records_materialLedgerIdTomaterial_ledger")
+  correction_records_correction_records_originalLedgerIdTomaterial_ledger CorrectionRecord[]       @relation("correction_records_originalLedgerIdTomaterial_ledger")
+  production_batches                                                      ProductionBatch?         @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  user                                                                    User                     @relation(fields: [userId], references: [id])
+  material_receipts                                                       material_receipts?
+
+  @@index([batchId], map: "material_ledger_batchId_fkey")
+  @@index([material, createdAt])
+  @@index([reference])
+  @@index([type, createdAt])
+  @@index([userId], map: "material_ledger_userId_fkey")
+  @@map("material_ledger")
+}
+
+model ProductionBatch {
+  id                     Int                  @id @default(autoincrement())
+  batchNumber            String               @unique @db.VarChar(64)
+  specificationId        Int
+  rolls                  Int
+  filmIssuedKg           Decimal              @db.Decimal(18, 6)
+  adhesiveIssuedKg       Decimal              @db.Decimal(18, 6)
+  dryWastageKg           Decimal              @db.Decimal(18, 6)
+  expectedFilmKg         Decimal              @db.Decimal(18, 6)
+  expectedAdhesiveKg     Decimal              @db.Decimal(18, 6)
+  actualDryAdhesiveKg    Decimal              @db.Decimal(18, 6)
+  productionDifferenceKg Decimal              @db.Decimal(18, 6)
+  userId                 Int
+  createdAt              DateTime             @default(now())
+  finished_goods_ledger  FinishedGoodsLedger?
+  material_ledger        MaterialLedger[]
+  specification          TapeSpecification    @relation(fields: [specificationId], references: [id])
+  users                  User                 @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([specificationId, createdAt])
+  @@index([userId], map: "production_batches_userId_fkey")
+  @@map("production_batches")
+}
+
+model FinishedGoodsLedger {
+  id                 Int                        @id @default(autoincrement())
+  specificationId    Int
+  deltaRolls         Int
+  type               finished_goods_ledger_type
+  reference          String                     @db.VarChar(100)
+  reason             String?                    @db.VarChar(300)
+  userId             Int
+  batchId            Int?                       @unique
+  orderId            Int?
+  createdAt          DateTime                   @default(now())
+  production_batches ProductionBatch?           @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  sales_orders       SalesOrder?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  specification      TapeSpecification          @relation(fields: [specificationId], references: [id])
+  user               User                       @relation(fields: [userId], references: [id])
+
+  @@index([specificationId, createdAt])
+  @@index([orderId], map: "finished_goods_ledger_orderId_fkey")
+  @@index([type, createdAt])
+  @@index([userId], map: "finished_goods_ledger_userId_fkey")
+  @@map("finished_goods_ledger")
+}
+
+model Customer {
+  id          Int          @id @default(autoincrement())
+  name        String       @db.VarChar(100)
+  email       String?
+  userId      Int
+  createdAt   DateTime     @default(now())
+  users       User         @relation(fields: [userId], references: [id])
+  salesOrders SalesOrder[]
+
+  @@index([name])
+  @@index([userId], map: "customers_userId_fkey")
+  @@map("customers")
+}
+
+model SalesOrder {
+  id                    Int                   @id @default(autoincrement())
+  orderNumber           String                @unique @db.VarChar(64)
+  customerId            Int
+  specificationId       Int
+  orderedRolls          Int
+  dispatchedRolls       Int                   @default(0)
+  cancelledRolls        Int                   @default(0)
+  userId                Int
+  createdAt             DateTime              @default(now())
+  cancellations         Cancellation[]
+  dispatches            Dispatch[]
+  finished_goods_ledger FinishedGoodsLedger[]
+  reservations          OrderReservation[]
+  customer              Customer              @relation(fields: [customerId], references: [id])
+  specification         TapeSpecification     @relation(fields: [specificationId], references: [id])
+  users                 User                  @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([customerId, createdAt])
+  @@index([specificationId, createdAt])
+  @@index([userId], map: "sales_orders_userId_fkey")
+  @@map("sales_orders")
+}
+
+model OrderReservation {
+  id        Int                      @id @default(autoincrement())
+  orderId   Int
+  event     order_reservations_event
+  rolls     Int
+  userId    Int
+  createdAt DateTime                 @default(now())
+  order     SalesOrder               @relation(fields: [orderId], references: [id])
+  users     User                     @relation(fields: [userId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@index([userId], map: "order_reservations_userId_fkey")
+  @@map("order_reservations")
+}
+
+model Dispatch {
+  id        Int        @id @default(autoincrement())
+  orderId   Int
+  rolls     Int
+  reference String     @db.VarChar(80)
+  userId    Int
+  createdAt DateTime   @default(now())
+  order     SalesOrder @relation(fields: [orderId], references: [id])
+  users     User       @relation(fields: [userId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@index([userId], map: "dispatches_userId_fkey")
+  @@map("dispatches")
+}
+
+model Cancellation {
+  id        Int        @id @default(autoincrement())
+  orderId   Int
+  rolls     Int
+  reason    String     @db.VarChar(300)
+  userId    Int
+  createdAt DateTime   @default(now())
+  order     SalesOrder @relation(fields: [orderId], references: [id])
+  users     User       @relation(fields: [userId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@index([userId], map: "cancellations_userId_fkey")
+  @@map("cancellations")
+}
+
+model CorrectionRecord {
+  id                                                                   Int                         @id @default(autoincrement())
+  material                                                             correction_records_material
+  adjustment                                                           Decimal                     @db.Decimal(18, 6)
+  reason                                                               String                      @db.VarChar(300)
+  reference                                                            String                      @db.VarChar(80)
+  originalLedgerId                                                     Int
+  materialLedgerId                                                     Int                         @unique
+  userId                                                               Int
+  createdAt                                                            DateTime                    @default(now())
+  material_ledger_correction_records_materialLedgerIdTomaterial_ledger MaterialLedger              @relation("correction_records_materialLedgerIdTomaterial_ledger", fields: [materialLedgerId], references: [id])
+  material_ledger_correction_records_originalLedgerIdTomaterial_ledger MaterialLedger              @relation("correction_records_originalLedgerIdTomaterial_ledger", fields: [originalLedgerId], references: [id])
+  users                                                                User                        @relation(fields: [userId], references: [id])
+
+  @@index([material, createdAt])
+  @@index([originalLedgerId], map: "correction_records_originalLedgerId_fkey")
+  @@index([userId], map: "correction_records_userId_fkey")
+  @@map("correction_records")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  action     String   @db.VarChar(80)
+  entityType String   @db.VarChar(80)
+  entityId   String   @db.VarChar(100)
+  reference  String   @db.VarChar(100)
+  reason     String?  @db.VarChar(300)
+  details    Json?
+  userId     Int
+  createdAt  DateTime @default(now())
+  users      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([entityType, createdAt])
+  @@index([reference])
+  @@map("audit_logs")
+}
+
+model IdempotencyKey {
+  key       String   @id @db.VarChar(100)
+  operation String   @db.VarChar(80)
+  result    Json
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("idempotency_keys")
+}
+
+model material_balances {
+  material  material_balances_material @id
+  quantity  Decimal                    @default(0.000000) @db.Decimal(18, 6)
+  updatedAt DateTime
+}
+
+model material_receipts {
+  id              Int                        @id @default(autoincrement())
+  material        material_receipts_material
+  quantity        Decimal                    @db.Decimal(18, 6)
+  reference       String                     @db.VarChar(80)
+  ledgerId        Int                        @unique
+  userId          Int
+  createdAt       DateTime                   @default(now())
+  material_ledger MaterialLedger             @relation(fields: [ledgerId], references: [id])
+  users           User                       @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([userId], map: "material_receipts_userId_fkey")
+}
+
+model sessions {
+  tokenHash String   @id @db.Char(64)
+  userId    Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  users     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId, expiresAt])
+}
+
 enum Role {
   ADMIN
   STAFF
 }
 
-enum MaterialType {
+enum material_balances_material {
   FILM
-  LIQUID_ADHESIVE
-  CORE
+  ADHESIVE
+  CORES
 }
 
-enum MaterialTransactionType {
+enum correction_records_material {
+  FILM
+  ADHESIVE
+  CORES
+}
+
+enum material_ledger_material {
+  FILM
+  ADHESIVE
+  CORES
+}
+
+enum material_receipts_material {
+  FILM
+  ADHESIVE
+  CORES
+}
+
+enum material_ledger_type {
   RECEIPT
   PRODUCTION_ISSUE
   DAMAGE
   CORRECTION
 }
 
-enum MaterialUnit {
-  KG
-  PCS
+enum order_reservations_event {
+  RESERVE
+  RELEASE
+  DISPATCH
 }
 
-enum BatchStatus {
-  COMPLETED
-  CANCELLED
-}
-
-enum FinishedGoodsTransactionType {
-  PRODUCTION_RECEIPT
-  ORDER_DISPATCH
+enum finished_goods_ledger_type {
+  PRODUCTION
+  DISPATCH
   CORRECTION
-}
-
-enum OrderUnit {
-  ROLLS
-  METRES
-  NET_KG
-}
-
-enum OrderStatus {
-  CONFIRMED
-  PARTIALLY_DISPATCHED
-  FULFILLED
-  CANCELLED
-}
-
-enum ReservationStatus {
-  ACTIVE
-  FULFILLED
-  RELEASED
-}
-
-enum CorrectionTarget {
-  MATERIAL_LEDGER
-  FINISHED_GOODS_LEDGER
-  PRODUCTION_BATCH
-  SALES_ORDER
-}
-
-model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  role         Role     @default(STAFF)
-  name         String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  createdSpecifications TapeSpecification[]
-  materialLedgers       MaterialLedger[]
-  productionBatches     ProductionBatch[]
-  finishedGoodsLedgers  FinishedGoodsLedger[]
-  salesOrders           SalesOrder[]
-  dispatches            Dispatch[]
-  cancellations         Cancellation[]
-  corrections           CorrectionRecord[]
-
-  @@map("users")
-}
-
-model TapeSpecification {
-  id                    String   @id @default(cuid())
-  code                  String   @unique
-  version               Int      @default(1)
-  widthMm               Decimal  @db.Decimal(10, 2)
-  filmGsm               Decimal  @db.Decimal(10, 2)
-  dryCoatingGsm         Decimal  @db.Decimal(10, 2)
-  adhesiveSolidsPercent Decimal  @db.Decimal(5, 2)
-  rollLengthM           Decimal  @db.Decimal(10, 2)
-  isUsedForProduction   Boolean  @default(false)
-  createdById           String
-  createdBy             User     @relation(fields: [createdById], references: [id])
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-
-  productionBatches    ProductionBatch[]
-  finishedGoodsLedgers FinishedGoodsLedger[]
-  salesOrders          SalesOrder[]
-  orderReservations    OrderReservation[]
-
-  @@map("tape_specifications")
-}
-
-model MaterialLedger {
-  id              String                  @id @default(cuid())
-  materialType    MaterialType
-  transactionType MaterialTransactionType
-  quantity        Decimal                 @db.Decimal(12, 4) // Positive for additions, negative for deductions
-  unit            MaterialUnit
-  referenceType   String?                 // "BATCH", "RECEIPT", "DAMAGE", "CORRECTION"
-  referenceId     String?
-  notes           String?
-  userId          String
-  user            User                    @relation(fields: [userId], references: [id])
-  createdAt       DateTime                @default(now())
-
-  @@index([materialType, createdAt])
-  @@map("material_ledger")
-}
-
-model ProductionBatch {
-  id                     String            @id @default(cuid())
-  batchNumber            String            @unique
-  specificationId        String
-  specification          TapeSpecification @relation(fields: [specificationId], references: [id])
-  rollCount              Int
-  filmIssuedKg           Decimal           @db.Decimal(12, 4)
-  liquidAdhesiveIssuedKg Decimal           @db.Decimal(12, 4)
-  dryWastageKg           Decimal           @db.Decimal(12, 4)
-  coresIssued            Int
-  expectedFilmKg         Decimal           @db.Decimal(12, 4)
-  expectedDryAdhesiveKg  Decimal           @db.Decimal(12, 4)
-  expectedLiquidAdhesiveKg Decimal         @db.Decimal(12, 4)
-  actualDryAdhesiveKg    Decimal           @db.Decimal(12, 4)
-  productionInputKg      Decimal           @db.Decimal(12, 4)
-  netTapeProducedKg      Decimal           @db.Decimal(12, 4)
-  productionOutputKg     Decimal           @db.Decimal(12, 4)
-  productionDifferenceKg Decimal           @db.Decimal(12, 4)
-  status                 BatchStatus       @default(COMPLETED)
-  createdById            String
-  createdBy              User              @relation(fields: [createdById], references: [id])
-  createdAt              DateTime          @default(now())
-
-  @@map("production_batches")
-}
-
-model FinishedGoodsLedger {
-  id              String                       @id @default(cuid())
-  specificationId String
-  specification   TapeSpecification            @relation(fields: [specificationId], references: [id])
-  transactionType FinishedGoodsTransactionType
-  rollCount       Int                          // Positive for receipt, negative for dispatch/adjustment
-  netTapeKg       Decimal                      @db.Decimal(12, 4)
-  metres          Decimal                      @db.Decimal(12, 4)
-  referenceType   String?                      // "PRODUCTION_BATCH", "ORDER_DISPATCH", "CORRECTION"
-  referenceId     String?
-  notes           String?
-  userId          String
-  user            User                         @relation(fields: [userId], references: [id])
-  createdAt       DateTime                     @default(now())
-
-  @@index([specificationId, createdAt])
-  @@map("finished_goods_ledger")
-}
-
-model Customer {
-  id            String       @id @default(cuid())
-  code          String       @unique
-  name          String
-  contactPerson String?
-  email         String?
-  phone         String?
-  address       String?
-  createdAt     DateTime     @default(now())
-
-  salesOrders   SalesOrder[]
-
-  @@map("customers")
-}
-
-model SalesOrder {
-  id                    String            @id @default(cuid())
-  orderNumber           String            @unique
-  customerId            String
-  customer              Customer          @relation(fields: [customerId], references: [id])
-  specificationId       String
-  specification         TapeSpecification @relation(fields: [specificationId], references: [id])
-  orderedUnit           OrderUnit
-  originalInputQuantity Decimal           @db.Decimal(12, 4)
-  orderedRolls          Int
-  reservedRolls         Int               @default(0)
-  dispatchedRolls       Int               @default(0)
-  cancelledRolls        Int               @default(0)
-  status                OrderStatus       @default(CONFIRMED)
-  notes                 String?
-  createdById           String
-  createdBy             User              @relation(fields: [createdById], references: [id])
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
-
-  reservations          OrderReservation[]
-  dispatches            Dispatch[]
-  cancellations         Cancellation[]
-
-  @@map("sales_orders")
-}
-
-model OrderReservation {
-  id              String            @id @default(cuid())
-  orderId         String
-  order           SalesOrder        @relation(fields: [orderId], references: [id])
-  specificationId String
-  specification   TapeSpecification @relation(fields: [specificationId], references: [id])
-  reservedRolls   Int
-  releasedRolls   Int               @default(0)
-  dispatchedRolls Int               @default(0)
-  status          ReservationStatus @default(ACTIVE)
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-
-  @@index([orderId])
-  @@index([specificationId])
-  @@map("order_reservations")
-}
-
-model Dispatch {
-  id             String     @id @default(cuid())
-  dispatchNumber String     @unique
-  orderId        String
-  order          SalesOrder @relation(fields: [orderId], references: [id])
-  rollCount      Int
-  notes          String?
-  createdById    String
-  createdBy      User       @relation(fields: [createdById], references: [id])
-  createdAt      DateTime   @default(now())
-
-  @@index([orderId])
-  @@map("dispatches")
-}
-
-model Cancellation {
-  id            String     @id @default(cuid())
-  orderId       String
-  order         SalesOrder @relation(fields: [orderId], references: [id])
-  releasedRolls Int
-  reason        String
-  createdById   String
-  createdBy     User       @relation(fields: [createdById], references: [id])
-  createdAt     DateTime   @default(now())
-
-  @@index([orderId])
-  @@map("cancellations")
-}
-
-model CorrectionRecord {
-  id                 String           @id @default(cuid())
-  targetType         CorrectionTarget
-  targetId           String
-  reason             String           @db.Text
-  priorDataJson      String           @db.Text
-  correctionDataJson String           @db.Text
-  adminId            String
-  admin              User             @relation(fields: [adminId], references: [id])
-  createdAt          DateTime         @default(now())
-
-  @@index([targetType, targetId])
-  @@map("correction_records")
-}
-
-model AuditLog {
-  id          String   @id @default(cuid())
-  action      String
-  entity      String
-  entityId    String?
-  detailsJson String?  @db.Text
-  userId      String
-  userRole    String
-  ipAddress   String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
-
-  @@index([entity, entityId])
-  @@index([userId, createdAt])
-  @@map("audit_logs")
-}
-
-model IdempotencyKey {
-  id             String   @id @default(cuid())
-  key            String   @unique
-  route          String
-  requestHash    String
-  responseStatus Int
-  responseBody   String   @db.Text
-  userId         String
-  createdAt      DateTime @default(now())
-  expiresAt      DateTime
-
-  @@index([key])
-  @@map("idempotency_keys")
 }

@@ -40,17 +40,24 @@ export async function POST(
     await logAuditEvent({
       action: "DISPATCH_ORDER",
       entity: "Dispatch",
-      entityId: dispatch.id,
+      entityId: String(dispatch.id),
       details: {
-        dispatchNumber: dispatch.dispatchNumber,
+        dispatchReference: dispatch.reference,
         orderId: params.id,
-        rollCount: parsed.rollCount,
+        rolls: parsed.rollCount,
       },
       userId: user.id,
       userRole: user.role,
     });
 
-    const result = { success: true, dispatch };
+    const result = {
+      success: true,
+      dispatch: {
+        id: String(dispatch.id),
+        dispatchNumber: dispatch.reference,
+        rollCount: dispatch.rolls,
+      },
+    };
 
     if (idempotencyKey) {
       await saveIdempotency(idempotencyKey, `/api/orders/${params.id}/dispatch`, body, 201, result, user.id);

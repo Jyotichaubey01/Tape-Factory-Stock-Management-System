@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
-import { customerSchema } from "@/lib/validations";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -13,7 +12,18 @@ export async function GET() {
     orderBy: { name: "asc" },
   });
 
-  return NextResponse.json({ customers });
+  const mapped = customers.map((c) => ({
+    id: String(c.id),
+    code: `CUST-${String(c.id).padStart(3, "0")}`,
+    name: c.name,
+    email: c.email || "",
+    contactPerson: "",
+    phone: "",
+    address: "",
+    createdAt: c.createdAt,
+  }));
+
+  return NextResponse.json({ customers: mapped });
 }
 
 export async function POST(req: NextRequest) {
@@ -24,10 +34,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const parsed = customerSchema.parse(body);
-
     const customer = await prisma.customer.create({
-      data: parsed,
+      data: {
+        name: body.name,
+        email: body.email || null,
+        userId: parseInt(user.id, 10) || 1,
+      },
     });
 
     return NextResponse.json({ success: true, customer }, { status: 201 });

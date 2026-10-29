@@ -24,7 +24,19 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  return NextResponse.json({ balances, ledger });
+  const mappedLedger = ledger.map((l) => ({
+    id: String(l.id),
+    materialType: l.material === "ADHESIVE" ? "LIQUID_ADHESIVE" : l.material === "CORES" ? "CORE" : "FILM",
+    transactionType: l.type,
+    quantity: Number(l.quantity),
+    unit: l.material === "CORES" ? "PCS" : "KG",
+    referenceId: l.reference,
+    notes: l.reason || "",
+    createdAt: l.createdAt,
+    user: l.user,
+  }));
+
+  return NextResponse.json({ balances, ledger: mappedLedger });
 }
 
 export async function POST(req: NextRequest) {
@@ -45,8 +57,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const parsed = materialReceiptSchema.parse(body);
 
+    const dbMaterial =
+      parsed.materialType === "LIQUID_ADHESIVE"
+        ? "ADHESIVE"
+        : parsed.materialType === "CORE"
+        ? "CORES"
+        : "FILM";
+
     const record = await receiveRawMaterial({
-      materialType: parsed.materialType,
+      materialType: dbMaterial as any,
       quantity: parsed.quantity,
       notes: parsed.notes,
       userId: user.id,
@@ -55,8 +74,8 @@ export async function POST(req: NextRequest) {
     await logAuditEvent({
       action: "RECEIVE_RAW_MATERIAL",
       entity: "MaterialLedger",
-      entityId: record.id,
-      details: { materialType: parsed.materialType, quantity: parsed.quantity },
+      entityId: String(record.id),
+      details: { material: dbMaterial, quantity: parsed.quantity },
       userId: user.id,
       userRole: user.role,
     });

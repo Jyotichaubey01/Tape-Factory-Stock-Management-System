@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
-import { tapeSpecificationSchema } from "@/lib/validations";
 import { createSpecification } from "@/lib/services/specification-service";
 import { logAuditEvent } from "@/lib/audit";
 
@@ -13,14 +12,23 @@ export async function GET() {
 
   const specs = await prisma.tapeSpecification.findMany({
     orderBy: { createdAt: "desc" },
-    include: {
-      createdBy: {
-        select: { id: true, name: true, email: true },
-      },
-    },
   });
 
-  return NextResponse.json({ specifications: specs });
+  // Map to common frontend format
+  const mapped = specs.map((s) => ({
+    id: s.id,
+    code: s.code,
+    version: 1,
+    widthMm: Number(s.widthMm),
+    filmGsm: Number(s.filmGsm),
+    dryCoatingGsm: Number(s.dryAdhesiveGsm),
+    adhesiveSolidsPercent: Number(s.solidsPercent),
+    rollLengthM: Number(s.rollLengthM),
+    isUsedForProduction: false,
+    createdAt: s.createdAt,
+  }));
+
+  return NextResponse.json({ specifications: mapped });
 }
 
 export async function POST(req: NextRequest) {
@@ -29,7 +37,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Admin only for creating new base specifications
   if (user.role !== "ADMIN") {
     return NextResponse.json({ error: "Only Admin can create tape specifications" }, { status: 403 });
   }
@@ -44,8 +51,8 @@ export async function POST(req: NextRequest) {
     await logAuditEvent({
       action: "CREATE_SPECIFICATION",
       entity: "TapeSpecification",
-      entityId: spec.id,
-      details: { code: spec.code, widthMm: spec.widthMm, filmGsm: spec.filmGsm },
+      entityId: String(spec.id),
+      details: { code: spec.code, widthMm: Number(spec.widthMm), filmGsm: Number(spec.filmGsm) },
       userId: user.id,
       userRole: user.role,
     });

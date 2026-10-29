@@ -17,13 +17,29 @@ export async function GET() {
     take: 100,
     include: {
       specification: true,
-      createdBy: {
+      users: {
         select: { id: true, name: true, email: true },
       },
     },
   });
 
-  return NextResponse.json({ batches });
+  const mappedBatches = batches.map((b) => ({
+    id: String(b.id),
+    batchNumber: b.batchNumber,
+    rollCount: b.rolls,
+    filmIssuedKg: Number(b.filmIssuedKg),
+    liquidAdhesiveIssuedKg: Number(b.adhesiveIssuedKg),
+    dryWastageKg: Number(b.dryWastageKg),
+    coresIssued: b.rolls,
+    productionDifferenceKg: Number(b.productionDifferenceKg),
+    createdAt: b.createdAt,
+    specification: {
+      code: b.specification.code,
+    },
+    createdBy: b.users,
+  }));
+
+  return NextResponse.json({ batches: mappedBatches });
 }
 
 export async function POST(req: NextRequest) {
@@ -58,12 +74,12 @@ export async function POST(req: NextRequest) {
     await logAuditEvent({
       action: "RECORD_PRODUCTION_BATCH",
       entity: "ProductionBatch",
-      entityId: batch.id,
+      entityId: String(batch.id),
       details: {
         batchNumber: batch.batchNumber,
-        rollCount: batch.rollCount,
-        filmIssuedKg: batch.filmIssuedKg,
-        liquidAdhesiveIssuedKg: batch.liquidAdhesiveIssuedKg,
+        rolls: batch.rolls,
+        filmIssuedKg: Number(batch.filmIssuedKg),
+        adhesiveIssuedKg: Number(batch.adhesiveIssuedKg),
       },
       userId: user.id,
       userRole: user.role,

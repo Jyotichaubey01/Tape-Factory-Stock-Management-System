@@ -2,24 +2,26 @@ import { prisma } from "../prisma";
 import Decimal from "decimal.js";
 import { verifyProductionBatch, calculateBOM, PRODUCTION_TOLERANCE_KG } from "../bom";
 import { getMaterialBalances } from "./stock-service";
-import { logAuditEvent } from "../audit";
 import { Prisma } from "@prisma/client";
 
 export interface CreateProductionBatchInput {
   batchNumber: string;
-  specificationId: string;
+  specificationId: number | string;
   rollCount: number;
   filmIssuedKg: number;
   liquidAdhesiveIssuedKg: number;
   dryWastageKg: number;
-  userId: string;
+  userId: number | string;
   userRole: string;
 }
 
 export async function createProductionBatch(input: CreateProductionBatchInput) {
+  const specId = typeof input.specificationId === "number" ? input.specificationId : parseInt(String(input.specificationId), 10);
+  const numericUserId = typeof input.userId === "number" ? input.userId : parseInt(String(input.userId), 10) || 1;
+
   // 1. Fetch Specification
   const spec = await prisma.tapeSpecification.findUnique({
-    where: { id: input.specificationId },
+    where: { id: specId },
   });
 
   if (!spec) {
@@ -31,8 +33,8 @@ export async function createProductionBatch(input: CreateProductionBatchInput) {
     spec: {
       widthMm: spec.widthMm.toString(),
       filmGsm: spec.filmGsm.toString(),
-      dryCoatingGsm: spec.dryCoatingGsm.toString(),
-      adhesiveSolidsPercent: spec.adhesiveSolidsPercent.toString(),
+      dryCoatingGsm: spec.dryAdhesiveGsm.toString(),
+      adhesiveSolidsPercent: spec.solidsPercent.toString(),
       rollLengthM: spec.rollLengthM.toString(),
     },
     rollCount: input.rollCount,
@@ -55,17 +57,6 @@ export async function createProductionBatch(input: CreateProductionBatchInput) {
   if (existingBatch) {
     throw new Error(`Batch number "${input.batchNumber}" already exists. Batch numbers must be globally unique.`);
   }
-
-  const bom = calculateBOM(
-    {
-      widthMm: spec.widthMm.toString(),
-      filmGsm: spec.filmGsm.toString(),
-      dryCoatingGsm: spec.dryCoatingGsm.toString(),
-      adhesiveSolidsPercent: spec.adhesiveSolidsPercent.toString(),
-      rollLengthM: spec.rollLengthM.toString(),
-    },
-    input.rollCount
-  );
 
   // 4. Atomic Transaction: Check raw materials -> Deduct materials -> Create Batch -> Add Finished Goods
   return await prisma.$transaction(async (tx) => {
@@ -107,89 +98,70 @@ export async function createProductionBatch(input: CreateProductionBatchInput) {
       throw new Error(`Production failed due to insufficient raw materials:\n${shortages.join("\n")}`);
     }
 
-    // Material Deductions (append-only ledger with negative quantities)
-    await tx.materialLedger.create({
-      data: {
-        materialType: "FILM",
-        transactionType: "PRODUCTION_ISSUE",
-        quantity: requiredFilm.negated().toNumber(),
-        unit: "KG",
-        referenceType: "BATCH",
-        referenceId: input.batchNumber,
-        notes: `Production issue for Batch ${input.batchNumber}`,
-        userId: input.userId,
-      },
-    });
-
-    await tx.materialLedger.create({
-      data: {
-        materialType: "LIQUID_ADHESIVE",
-        transactionType: "PRODUCTION_ISSUE",
-        quantity: requiredAdhesive.negated().toNumber(),
-        unit: "KG",
-        referenceType: "BATCH",
-        referenceId: input.batchNumber,
-        notes: `Production issue for Batch ${input.batchNumber}`,
-        userId: input.userId,
-      },
-    });
-
-    await tx.materialLedger.create({
-      data: {
-        materialType: "CORE",
-        transactionType: "PRODUCTION_ISSUE",
-        quantity: -requiredCores,
-        unit: "PCS",
-        referenceType: "BATCH",
-        referenceId: input.batchNumber,
-        notes: `Production core issue for Batch ${input.batchNumber}`,
-        userId: input.userId,
-      },
-    });
-
     // Create Production Batch record
     const batch = await tx.productionBatch.create({
       data: {
         batchNumber: input.batchNumber,
-        specificationId: input.specificationId,
-        rollCount: input.rollCount,
+        specificationId: specId,
+        rolls: input.rollCount,
         filmIssuedKg: verification.actualFilmIssuedKg.toNumber(),
-        liquidAdhesiveIssuedKg: verification.actualLiquidAdhesiveIssuedKg.toNumber(),
+        adhesiveIssuedKg: verification.actualLiquidAdhesiveIssuedKg.toNumber(),
         dryWastageKg: verification.dryWastageKg.toNumber(),
-        coresIssued: input.rollCount,
         expectedFilmKg: verification.expectedFilmKg.toNumber(),
-        expectedDryAdhesiveKg: verification.expectedDryAdhesiveKg.toNumber(),
-        expectedLiquidAdhesiveKg: verification.expectedLiquidAdhesiveKg.toNumber(),
+        expectedAdhesiveKg: verification.expectedLiquidAdhesiveKg.toNumber(),
         actualDryAdhesiveKg: verification.actualDryAdhesiveKg.toNumber(),
-        productionInputKg: verification.productionInputKg.toNumber(),
-        netTapeProducedKg: verification.netTapeProducedKg.toNumber(),
-        productionOutputKg: verification.productionOutputKg.toNumber(),
         productionDifferenceKg: verification.productionDifferenceKg.toNumber(),
-        status: "COMPLETED",
-        createdById: input.userId,
+        userId: numericUserId,
       },
     });
 
-    // Mark specification immutable (used in production)
-    if (!spec.isUsedForProduction) {
-      await tx.tapeSpecification.update({
-        where: { id: spec.id },
-        data: { isUsedForProduction: true },
-      });
-    }
+    // Material Deductions (append-only ledger with negative quantities)
+    await tx.materialLedger.create({
+      data: {
+        material: "FILM",
+        type: "PRODUCTION_ISSUE",
+        quantity: requiredFilm.negated().toNumber(),
+        reference: input.batchNumber,
+        reason: `Production issue for Batch ${input.batchNumber}`,
+        userId: numericUserId,
+        batchId: batch.id,
+      },
+    });
+
+    await tx.materialLedger.create({
+      data: {
+        material: "ADHESIVE",
+        type: "PRODUCTION_ISSUE",
+        quantity: requiredAdhesive.negated().toNumber(),
+        reference: input.batchNumber,
+        reason: `Production issue for Batch ${input.batchNumber}`,
+        userId: numericUserId,
+        batchId: batch.id,
+      },
+    });
+
+    await tx.materialLedger.create({
+      data: {
+        material: "CORES",
+        type: "PRODUCTION_ISSUE",
+        quantity: -requiredCores,
+        reference: input.batchNumber,
+        reason: `Production core issue for Batch ${input.batchNumber}`,
+        userId: numericUserId,
+        batchId: batch.id,
+      },
+    });
 
     // Add Finished Goods to ledger
     await tx.finishedGoodsLedger.create({
       data: {
-        specificationId: input.specificationId,
-        transactionType: "PRODUCTION_RECEIPT",
-        rollCount: input.rollCount,
-        netTapeKg: bom.netTapeKg.toNumber(),
-        metres: bom.totalMetres.toNumber(),
-        referenceType: "PRODUCTION_BATCH",
-        referenceId: batch.batchNumber,
-        notes: `Batch ${batch.batchNumber} completion`,
-        userId: input.userId,
+        specificationId: specId,
+        deltaRolls: input.rollCount,
+        type: "PRODUCTION",
+        reference: batch.batchNumber,
+        reason: `Batch ${batch.batchNumber} completion`,
+        userId: numericUserId,
+        batchId: batch.id,
       },
     });
 

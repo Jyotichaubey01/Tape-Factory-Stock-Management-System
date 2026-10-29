@@ -17,7 +17,7 @@ export async function GET() {
     include: {
       customer: true,
       specification: true,
-      createdBy: {
+      users: {
         select: { id: true, name: true, email: true },
       },
       dispatches: true,
@@ -25,7 +25,51 @@ export async function GET() {
     },
   });
 
-  return NextResponse.json({ orders });
+  const mappedOrders = orders.map((o) => {
+    const isFulfilled = o.dispatchedRolls >= o.orderedRolls;
+    const isCancelled = o.cancelledRolls >= o.orderedRolls;
+    const isPartial = o.dispatchedRolls > 0;
+    const status = isFulfilled
+      ? "FULFILLED"
+      : isCancelled
+      ? "CANCELLED"
+      : isPartial
+      ? "PARTIALLY_DISPATCHED"
+      : "CONFIRMED";
+
+    const reserved = Math.max(0, o.orderedRolls - o.dispatchedRolls - o.cancelledRolls);
+
+    return {
+      id: String(o.id),
+      orderNumber: o.orderNumber,
+      orderedUnit: "ROLLS",
+      originalInputQuantity: o.orderedRolls,
+      orderedRolls: o.orderedRolls,
+      reservedRolls: reserved,
+      dispatchedRolls: o.dispatchedRolls,
+      cancelledRolls: o.cancelledRolls,
+      status,
+      createdAt: o.createdAt,
+      customer: {
+        name: o.customer.name,
+        code: `CUST-${String(o.customer.id).padStart(3, "0")}`,
+      },
+      specification: {
+        code: o.specification.code,
+        rollLengthM: Number(o.specification.rollLengthM),
+      },
+      createdBy: o.users,
+      dispatches: o.dispatches.map((d) => ({
+        id: String(d.id),
+        dispatchNumber: d.reference,
+        rollCount: d.rolls,
+        createdAt: d.createdAt,
+      })),
+      cancellations: o.cancellations,
+    };
+  });
+
+  return NextResponse.json({ orders: mappedOrders });
 }
 
 export async function POST(req: NextRequest) {
@@ -59,7 +103,7 @@ export async function POST(req: NextRequest) {
     await logAuditEvent({
       action: "CREATE_SALES_ORDER",
       entity: "SalesOrder",
-      entityId: order.id,
+      entityId: String(order.id),
       details: {
         orderNumber: order.orderNumber,
         orderedRolls: order.orderedRolls,

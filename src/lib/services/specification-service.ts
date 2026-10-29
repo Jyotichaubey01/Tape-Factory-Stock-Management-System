@@ -9,7 +9,7 @@ export interface CreateSpecificationInput {
   dryCoatingGsm: number;
   adhesiveSolidsPercent: number;
   rollLengthM: number;
-  createdById: string;
+  createdById?: string | number;
 }
 
 export async function createSpecification(input: CreateSpecificationInput) {
@@ -27,43 +27,40 @@ export async function createSpecification(input: CreateSpecificationInput) {
   return prisma.tapeSpecification.create({
     data: {
       code: parsed.code,
-      version: 1,
       widthMm: parsed.widthMm,
       filmGsm: parsed.filmGsm,
-      dryCoatingGsm: parsed.dryCoatingGsm,
-      adhesiveSolidsPercent: parsed.adhesiveSolidsPercent,
+      dryAdhesiveGsm: parsed.dryCoatingGsm,
+      solidsPercent: parsed.adhesiveSolidsPercent,
       rollLengthM: parsed.rollLengthM,
-      isUsedForProduction: false,
-      createdById: input.createdById,
     },
   });
 }
 
 /**
  * Creates a new version of an existing specification.
- * Preserves the original specification and all linked batches/orders.
  */
 export async function createSpecificationVersion(
-  originalId: string,
+  originalId: string | number,
   updatedFields: Partial<CreateSpecificationInput>,
-  userId: string
+  userId?: string | number
 ) {
+  const specId = typeof originalId === "number" ? originalId : parseInt(String(originalId), 10);
+
   const original = await prisma.tapeSpecification.findUnique({
-    where: { id: originalId },
+    where: { id: specId },
   });
 
   if (!original) {
     throw new Error(`Original specification "${originalId}" not found.`);
   }
 
-  const nextVersion = original.version + 1;
-  const newCode = `${original.code}-v${nextVersion}`;
+  const newCode = `${original.code}-v${Date.now().toString().slice(-4)}`;
 
   const widthMm = updatedFields.widthMm ?? original.widthMm.toNumber();
   const filmGsm = updatedFields.filmGsm ?? original.filmGsm.toNumber();
-  const dryCoatingGsm = updatedFields.dryCoatingGsm ?? original.dryCoatingGsm.toNumber();
+  const dryCoatingGsm = updatedFields.dryCoatingGsm ?? original.dryAdhesiveGsm.toNumber();
   const adhesiveSolidsPercent =
-    updatedFields.adhesiveSolidsPercent ?? original.adhesiveSolidsPercent.toNumber();
+    updatedFields.adhesiveSolidsPercent ?? original.solidsPercent.toNumber();
   const rollLengthM = updatedFields.rollLengthM ?? original.rollLengthM.toNumber();
 
   tapeSpecificationSchema.parse({
@@ -78,14 +75,11 @@ export async function createSpecificationVersion(
   return prisma.tapeSpecification.create({
     data: {
       code: newCode,
-      version: nextVersion,
       widthMm,
       filmGsm,
-      dryCoatingGsm,
-      adhesiveSolidsPercent,
+      dryAdhesiveGsm: dryCoatingGsm,
+      solidsPercent: adhesiveSolidsPercent,
       rollLengthM,
-      isUsedForProduction: false,
-      createdById: userId,
     },
   });
 }

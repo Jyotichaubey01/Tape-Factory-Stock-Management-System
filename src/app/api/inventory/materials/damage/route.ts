@@ -17,8 +17,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "A note explaining the damage/scrap is required" }, { status: 400 });
     }
 
+    const dbMaterial =
+      materialType === "LIQUID_ADHESIVE" ? "ADHESIVE" : materialType === "CORE" ? "CORES" : "FILM";
+
     const record = await recordMaterialDamage({
-      materialType,
+      materialType: dbMaterial as any,
       quantity: Number(quantity),
       notes,
       userId: user.id,
@@ -27,8 +30,8 @@ export async function POST(req: NextRequest) {
     await logAuditEvent({
       action: "RECORD_MATERIAL_DAMAGE",
       entity: "MaterialLedger",
-      entityId: record.id,
-      details: { materialType, quantity, notes },
+      entityId: String(record.id),
+      details: { material: dbMaterial, quantity, notes },
       userId: user.id,
       userRole: user.role,
     });

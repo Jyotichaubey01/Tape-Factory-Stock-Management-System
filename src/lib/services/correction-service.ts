@@ -2,19 +2,19 @@ import { prisma } from "../prisma";
 import Decimal from "decimal.js";
 import { getMaterialBalances, getFinishedGoodsBalances } from "./stock-service";
 import { calculateBOM } from "../bom";
+import { material_ledger_material, correction_records_material } from "@prisma/client";
 
 export interface AdminStockAdjustmentInput {
   targetType: "MATERIAL_LEDGER" | "FINISHED_GOODS_LEDGER";
-  materialType?: "FILM" | "LIQUID_ADHESIVE" | "CORE";
-  specificationId?: string;
-  adjustmentQuantity: number; // positive to add stock, negative to subtract
+  materialType?: "FILM" | "ADHESIVE" | "CORES";
+  specificationId?: number | string;
+  adjustmentQuantity: number;
   reason: string;
-  adminId: string;
+  adminId: number | string;
   adminRole: string;
 }
 
 export async function performAdminStockCorrection(input: AdminStockAdjustmentInput) {
-  // Permission guard: strictly ADMIN
   if (input.adminRole !== "ADMIN") {
     const err = new Error("FORBIDDEN: Only System Administrators can perform stock corrections.");
     (err as any).statusCode = 403;
@@ -29,6 +29,9 @@ export async function performAdminStockCorrection(input: AdminStockAdjustmentInp
     throw new Error("Adjustment quantity cannot be zero.");
   }
 
+  const numericAdminId =
+    typeof input.adminId === "number" ? input.adminId : parseInt(String(input.adminId), 10) || 1;
+
   return await prisma.$transaction(async (tx) => {
     // 1. Raw Material Correction
     if (input.targetType === "MATERIAL_LEDGER") {
@@ -40,13 +43,10 @@ export async function performAdminStockCorrection(input: AdminStockAdjustmentInp
       const adj = new Decimal(input.adjustmentQuantity);
 
       let currentBal = new Decimal(0);
-      let unit = "KG";
+      const unit = input.materialType === "CORES" ? "PCS" : "KG";
       if (input.materialType === "FILM") currentBal = new Decimal(balances.filmKg);
-      if (input.materialType === "LIQUID_ADHESIVE") currentBal = new Decimal(balances.liquidAdhesiveKg);
-      if (input.materialType === "CORE") {
-        currentBal = new Decimal(balances.coresPcs);
-        unit = "PCS";
-      }
+      if (input.materialType === "ADHESIVE") currentBal = new Decimal(balances.liquidAdhesiveKg);
+      if (input.materialType === "CORES") currentBal = new Decimal(balances.coresPcs);
 
       const projectedBal = currentBal.plus(adj);
       if (projectedBal.lt(0)) {
@@ -55,36 +55,36 @@ export async function performAdminStockCorrection(input: AdminStockAdjustmentInp
         );
       }
 
-      // Record linked correction record
-      const correctionRecord = await tx.correctionRecord.create({
+      const corrRef = `CORR-${Date.now()}`;
+
+      // Insert offsetting entry in MaterialLedger
+      const newLedgerEntry = await tx.materialLedger.create({
         data: {
-          targetType: "MATERIAL_LEDGER",
-          targetId: `RAW-${input.materialType}-${Date.now()}`,
-          reason: input.reason,
-          priorDataJson: JSON.stringify({
-            materialType: input.materialType,
-            previousBalance: currentBal.toNumber(),
-          }),
-          correctionDataJson: JSON.stringify({
-            adjustmentQuantity: adj.toNumber(),
-            projectedBalance: projectedBal.toNumber(),
-            unit,
-          }),
-          adminId: input.adminId,
+          material: input.materialType as material_ledger_material,
+          type: "CORRECTION",
+          quantity: adj.toNumber(),
+          reference: corrRef,
+          reason: `Admin correction: ${input.reason}`,
+          userId: numericAdminId,
         },
       });
 
-      // Insert offsetting entry in MaterialLedger
-      await tx.materialLedger.create({
+      // Find original ledger id or fallback to this new entry
+      const lastEntry = await tx.materialLedger.findFirst({
+        where: { material: input.materialType as material_ledger_material },
+        orderBy: { id: "desc" },
+      });
+
+      // Record linked correction record
+      const correctionRecord = await tx.correctionRecord.create({
         data: {
-          materialType: input.materialType,
-          transactionType: "CORRECTION",
-          quantity: adj.toNumber(),
-          unit: input.materialType === "CORE" ? "PCS" : "KG",
-          referenceType: "CORRECTION",
-          referenceId: correctionRecord.id,
-          notes: `Admin correction: ${input.reason}`,
-          userId: input.adminId,
+          material: input.materialType as correction_records_material,
+          adjustment: adj.toNumber(),
+          reason: input.reason,
+          reference: corrRef,
+          originalLedgerId: lastEntry ? lastEntry.id : newLedgerEntry.id,
+          materialLedgerId: newLedgerEntry.id,
+          userId: numericAdminId,
         },
       });
 
@@ -97,8 +97,13 @@ export async function performAdminStockCorrection(input: AdminStockAdjustmentInp
         throw new Error("Specification ID is required for finished goods corrections.");
       }
 
+      const specId =
+        typeof input.specificationId === "number"
+          ? input.specificationId
+          : parseInt(String(input.specificationId), 10);
+
       const spec = await tx.tapeSpecification.findUnique({
-        where: { id: input.specificationId },
+        where: { id: specId },
       });
 
       if (!spec) {
@@ -127,57 +132,19 @@ export async function performAdminStockCorrection(input: AdminStockAdjustmentInp
         );
       }
 
-      const bom = calculateBOM(
-        {
-          widthMm: spec.widthMm.toString(),
-          filmGsm: spec.filmGsm.toString(),
-          dryCoatingGsm: spec.dryCoatingGsm.toString(),
-          adhesiveSolidsPercent: spec.adhesiveSolidsPercent.toString(),
-          rollLengthM: spec.rollLengthM.toString(),
-        },
-        Math.abs(adjRolls) > 0 ? Math.abs(adjRolls) : 1
-      );
-
-      const netKg = adjRolls >= 0 ? bom.netTapeKg.toNumber() : -bom.netTapeKg.toNumber();
-      const metres = adjRolls >= 0 ? bom.totalMetres.toNumber() : -bom.totalMetres.toNumber();
-
-      // Record linked correction record
-      const correctionRecord = await tx.correctionRecord.create({
-        data: {
-          targetType: "FINISHED_GOODS_LEDGER",
-          targetId: `FG-${spec.code}-${Date.now()}`,
-          reason: input.reason,
-          priorDataJson: JSON.stringify({
-            specificationCode: spec.code,
-            previousOnHandRolls: onHandRolls,
-            activeReservedRolls: reservedRolls,
-          }),
-          correctionDataJson: JSON.stringify({
-            adjustmentRolls: adjRolls,
-            projectedOnHandRolls: projectedOnHand,
-            netKg,
-            metres,
-          }),
-          adminId: input.adminId,
-        },
-      });
-
       // Insert offsetting entry in FinishedGoodsLedger
-      await tx.finishedGoodsLedger.create({
+      const newFgEntry = await tx.finishedGoodsLedger.create({
         data: {
           specificationId: spec.id,
-          transactionType: "CORRECTION",
-          rollCount: adjRolls,
-          netTapeKg: netKg,
-          metres: metres,
-          referenceType: "CORRECTION",
-          referenceId: correctionRecord.id,
-          notes: `Admin correction: ${input.reason}`,
-          userId: input.adminId,
+          deltaRolls: adjRolls,
+          type: "CORRECTION",
+          reference: `CORR-FG-${Date.now()}`,
+          reason: `Admin correction: ${input.reason}`,
+          userId: numericAdminId,
         },
       });
 
-      return correctionRecord;
+      return newFgEntry;
     }
 
     throw new Error(`Unsupported correction target type: ${input.targetType}`);

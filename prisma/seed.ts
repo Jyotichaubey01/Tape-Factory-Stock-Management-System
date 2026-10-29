@@ -14,7 +14,7 @@ const prisma = new PrismaClient({
 });
 
 async function main() {
-  console.log("Starting database seed...");
+  console.log("Starting database seed against Aiven MySQL...");
 
   // 1. Seed Demo Users
   const adminPasswordHash = await bcrypt.hash("AdminDemo@2026", 12);
@@ -34,7 +34,7 @@ async function main() {
       role: Role.ADMIN,
     },
   });
-  console.log(`✓ Admin user seeded: ${adminUser.email}`);
+  console.log(`✓ Admin user verified/seeded: ${adminUser.email}`);
 
   const staffUser = await prisma.user.upsert({
     where: { email: "staff@tape.local" },
@@ -50,68 +50,73 @@ async function main() {
       role: Role.STAFF,
     },
   });
-  console.log(`✓ Staff user seeded: ${staffUser.email}`);
+  console.log(`✓ Staff user verified/seeded: ${staffUser.email}`);
 
-  // 2. Seed Standard Tape Specification
-  // Width: 48 mm, Film GSM: 25, Dry coating GSM: 22, Adhesive solids: 50%, Roll length: 1,000 metres
+  // 2. Seed Standard Tape Specification (48mm, 25 GSM film, 22 GSM dry adhesive, 50% solids, 1000m roll length)
   const standardSpec = await prisma.tapeSpecification.upsert({
     where: { code: "SPEC-48-1000-STD" },
     update: {
       widthMm: 48,
       filmGsm: 25,
-      dryCoatingGsm: 22,
-      adhesiveSolidsPercent: 50,
+      dryAdhesiveGsm: 22,
+      solidsPercent: 50,
       rollLengthM: 1000,
     },
     create: {
       code: "SPEC-48-1000-STD",
-      version: 1,
       widthMm: 48,
       filmGsm: 25,
-      dryCoatingGsm: 22,
-      adhesiveSolidsPercent: 50,
+      dryAdhesiveGsm: 22,
+      solidsPercent: 50,
       rollLengthM: 1000,
-      createdById: adminUser.id,
-      isUsedForProduction: false,
     },
   });
-  console.log(`✓ Tape specification seeded: ${standardSpec.code}`);
+  console.log(`✓ Tape specification verified/seeded: ${standardSpec.code}`);
 
-  // 3. Seed Dummy Customers
+  // Also ensure existing 'TF-48-25' has proper parameters
+  await prisma.tapeSpecification.upsert({
+    where: { code: "TF-48-25" },
+    update: {
+      widthMm: 48,
+      filmGsm: 25,
+      dryAdhesiveGsm: 22,
+      solidsPercent: 50,
+      rollLengthM: 1000,
+    },
+    create: {
+      code: "TF-48-25",
+      widthMm: 48,
+      filmGsm: 25,
+      dryAdhesiveGsm: 22,
+      solidsPercent: 50,
+      rollLengthM: 1000,
+    },
+  });
+
+  // 3. Seed Customers
   const dummyCustomers = [
     {
-      code: "CUST-ALPHA",
       name: "Alpha Packaging Solutions",
-      contactPerson: "Rajesh Sharma",
-      email: "rajesh@alphapack.in",
-      phone: "+91 98765 43210",
-      address: "Plot 14, Industrial Area Phase 1, Gurugram, Haryana",
+      email: "orders@alphapack.in",
+      userId: adminUser.id,
     },
     {
-      code: "CUST-APEX",
-      name: "Apex Logistics & Cargo",
-      contactPerson: "Anita Patel",
-      email: "anita.p@apexlogistics.com",
-      phone: "+91 98111 22334",
-      address: "Warehouse 8B, Transport Nagar, Bhiwandi, Maharashtra",
-    },
-    {
-      code: "CUST-GLOBAL",
-      name: "Global Freight Supplies",
-      contactPerson: "Vikram Malhotra",
-      email: "procurement@globalfreight.net",
-      phone: "+91 99222 33445",
-      address: "Unit 3, Logistics Park, Peenya, Bengaluru, Karnataka",
+      name: "Apex Logistics Corp",
+      email: "procurement@apexlogistics.com",
+      userId: adminUser.id,
     },
   ];
 
   for (const c of dummyCustomers) {
-    const cust = await prisma.customer.upsert({
-      where: { code: c.code },
-      update: c,
-      create: c,
+    const existing = await prisma.customer.findFirst({
+      where: { name: c.name },
     });
-    console.log(`✓ Customer seeded: ${cust.name} (${cust.code})`);
+    if (!existing) {
+      await prisma.customer.create({ data: c });
+      console.log(`✓ Customer seeded: ${c.name}`);
+    } else {
+      console.log(`✓ Customer exists: ${c.name}`);
+    }
   }
 
   console.log("Seeding finished successfully.");

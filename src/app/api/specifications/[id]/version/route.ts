@@ -23,8 +23,8 @@ export async function POST(
     await logAuditEvent({
       action: "VERSION_SPECIFICATION",
       entity: "TapeSpecification",
-      entityId: newSpec.id,
-      details: { originalId: params.id, newCode: newSpec.code, version: newSpec.version },
+      entityId: String(newSpec.id),
+      details: { originalId: params.id, newCode: newSpec.code },
       userId: user.id,
       userRole: user.role,
     });

@@ -5,22 +5,26 @@ export async function logAuditEvent(params: {
   entity: string;
   entityId?: string;
   details?: Record<string, any>;
-  userId: string;
-  userRole: string;
+  userId: string | number;
+  userRole?: string;
   ipAddress?: string;
   userAgent?: string;
+  reason?: string;
+  reference?: string;
 }) {
   try {
+    const numericUserId =
+      typeof params.userId === "number" ? params.userId : parseInt(params.userId, 10) || 1;
+
     await prisma.auditLog.create({
       data: {
         action: params.action,
-        entity: params.entity,
-        entityId: params.entityId || null,
-        detailsJson: params.details ? JSON.stringify(params.details) : null,
-        userId: params.userId,
-        userRole: params.userRole,
-        ipAddress: params.ipAddress || null,
-        userAgent: params.userAgent || null,
+        entityType: params.entity,
+        entityId: params.entityId ? String(params.entityId) : "N/A",
+        reference: params.reference || (params.entityId ? String(params.entityId) : "SYSTEM"),
+        reason: params.reason || null,
+        details: params.details || undefined,
+        userId: numericUserId,
       },
     });
   } catch (error) {

@@ -2,18 +2,17 @@ import { prisma } from "../prisma";
 import Decimal from "decimal.js";
 import { MaterialBalanceSummary, FinishedGoodsSummary } from "../types";
 import { calculateBOM } from "../bom";
-import { Prisma } from "@prisma/client";
+import { Prisma, material_ledger_material, material_ledger_type } from "@prisma/client";
 
 type PrismaTx = Prisma.TransactionClient;
 
 /**
  * Get current on-hand raw material balances from the append-only MaterialLedger.
- * Negative balances are strictly impossible by business invariant.
  */
 export async function getMaterialBalances(tx?: PrismaTx): Promise<MaterialBalanceSummary> {
   const db = tx || prisma;
   const sums = await db.materialLedger.groupBy({
-    by: ["materialType"],
+    by: ["material"],
     _sum: {
       quantity: true,
     },
@@ -24,10 +23,10 @@ export async function getMaterialBalances(tx?: PrismaTx): Promise<MaterialBalanc
   let coresPcs = new Decimal(0);
 
   for (const s of sums) {
-    const qty = new Decimal(s._sum.quantity?.toString() || "0");
-    if (s.materialType === "FILM") filmKg = qty;
-    if (s.materialType === "LIQUID_ADHESIVE") liquidAdhesiveKg = qty;
-    if (s.materialType === "CORE") coresPcs = qty;
+    const qty = new Decimal(s._sum?.quantity?.toString() || "0");
+    if (s.material === "FILM") filmKg = qty;
+    if (s.material === "ADHESIVE") liquidAdhesiveKg = qty;
+    if (s.material === "CORES") coresPcs = qty;
   }
 
   return {
@@ -41,10 +40,10 @@ export async function getMaterialBalances(tx?: PrismaTx): Promise<MaterialBalanc
  * Receive raw materials into inventory (append-only ledger).
  */
 export async function receiveRawMaterial(params: {
-  materialType: "FILM" | "LIQUID_ADHESIVE" | "CORE";
+  materialType: "FILM" | "ADHESIVE" | "CORES";
   quantity: number;
   notes?: string;
-  userId: string;
+  userId: string | number;
   tx?: PrismaTx;
 }) {
   const db = params.tx || prisma;
@@ -53,30 +52,29 @@ export async function receiveRawMaterial(params: {
     throw new Error("Received quantity must be strictly greater than 0");
   }
 
-  const unit = params.materialType === "CORE" ? "PCS" : "KG";
+  const numericUserId =
+    typeof params.userId === "number" ? params.userId : parseInt(params.userId, 10) || 1;
 
   return db.materialLedger.create({
     data: {
-      materialType: params.materialType,
-      transactionType: "RECEIPT",
+      material: params.materialType as material_ledger_material,
+      type: "RECEIPT" as material_ledger_type,
       quantity: qty.toNumber(),
-      unit,
-      referenceType: "MANUAL_RECEIPT",
-      notes: params.notes || "Stock arrival receipt",
-      userId: params.userId,
+      reference: `RECEIPT-${Date.now()}`,
+      reason: params.notes || "Stock arrival receipt",
+      userId: numericUserId,
     },
   });
 }
 
 /**
  * Record raw material damage or scrapping.
- * Rejects if stock is insufficient, showing the exact shortage.
  */
 export async function recordMaterialDamage(params: {
-  materialType: "FILM" | "LIQUID_ADHESIVE" | "CORE";
+  materialType: "FILM" | "ADHESIVE" | "CORES";
   quantity: number;
   notes: string;
-  userId: string;
+  userId: string | number;
   tx?: PrismaTx;
 }) {
   const execute = async (db: PrismaTx) => {
@@ -87,13 +85,10 @@ export async function recordMaterialDamage(params: {
     }
 
     let currentStock = new Decimal(0);
-    let unit = "KG";
+    const unit = params.materialType === "CORES" ? "PCS" : "KG";
     if (params.materialType === "FILM") currentStock = new Decimal(balances.filmKg);
-    if (params.materialType === "LIQUID_ADHESIVE") currentStock = new Decimal(balances.liquidAdhesiveKg);
-    if (params.materialType === "CORE") {
-      currentStock = new Decimal(balances.coresPcs);
-      unit = "PCS";
-    }
+    if (params.materialType === "ADHESIVE") currentStock = new Decimal(balances.liquidAdhesiveKg);
+    if (params.materialType === "CORES") currentStock = new Decimal(balances.coresPcs);
 
     if (currentStock.lt(qty)) {
       const shortage = qty.minus(currentStock);
@@ -102,15 +97,17 @@ export async function recordMaterialDamage(params: {
       );
     }
 
+    const numericUserId =
+      typeof params.userId === "number" ? params.userId : parseInt(params.userId, 10) || 1;
+
     return db.materialLedger.create({
       data: {
-        materialType: params.materialType,
-        transactionType: "DAMAGE",
+        material: params.materialType as material_ledger_material,
+        type: "DAMAGE" as material_ledger_type,
         quantity: qty.negated().toNumber(),
-        unit: params.materialType === "CORE" ? "PCS" : "KG",
-        referenceType: "DAMAGE_REPORT",
-        notes: params.notes,
-        userId: params.userId,
+        reference: `DAMAGE-${Date.now()}`,
+        reason: params.notes,
+        userId: numericUserId,
       },
     });
   };
@@ -123,7 +120,6 @@ export async function recordMaterialDamage(params: {
 
 /**
  * Get finished goods stock summary per specification.
- * Distinguishes on-hand physical rolls, active reservations, and net available to promise.
  */
 export async function getFinishedGoodsBalances(tx?: PrismaTx): Promise<FinishedGoodsSummary[]> {
   const db = tx || prisma;
@@ -134,26 +130,23 @@ export async function getFinishedGoodsBalances(tx?: PrismaTx): Promise<FinishedG
   const summaries: FinishedGoodsSummary[] = [];
 
   for (const spec of specs) {
-    // Physical on-hand rolls = sum of FinishedGoodsLedger rollCount
+    // Physical on-hand rolls = sum of deltaRolls from finished_goods_ledger
     const fgSum = await db.finishedGoodsLedger.aggregate({
       where: { specificationId: spec.id },
       _sum: {
-        rollCount: true,
+        deltaRolls: true,
       },
     });
-    const onHandRolls = fgSum._sum.rollCount || 0;
+    const onHandRolls = fgSum._sum?.deltaRolls || 0;
 
-    // Active reserved rolls = sum of active reservations (reservedRolls - releasedRolls - dispatchedRolls)
-    const activeReservations = await db.orderReservation.findMany({
-      where: {
-        specificationId: spec.id,
-        status: "ACTIVE",
-      },
+    // Active reserved rolls = sum of active reservations (orderedRolls - dispatchedRolls - cancelledRolls)
+    const activeOrders = await db.salesOrder.findMany({
+      where: { specificationId: spec.id },
     });
 
     let reservedRolls = 0;
-    for (const res of activeReservations) {
-      const pending = res.reservedRolls - res.releasedRolls - res.dispatchedRolls;
+    for (const ord of activeOrders) {
+      const pending = ord.orderedRolls - ord.dispatchedRolls - ord.cancelledRolls;
       if (pending > 0) reservedRolls += pending;
     }
 
@@ -163,8 +156,8 @@ export async function getFinishedGoodsBalances(tx?: PrismaTx): Promise<FinishedG
       {
         widthMm: spec.widthMm.toString(),
         filmGsm: spec.filmGsm.toString(),
-        dryCoatingGsm: spec.dryCoatingGsm.toString(),
-        adhesiveSolidsPercent: spec.adhesiveSolidsPercent.toString(),
+        dryCoatingGsm: spec.dryAdhesiveGsm.toString(),
+        adhesiveSolidsPercent: spec.solidsPercent.toString(),
         rollLengthM: spec.rollLengthM.toString(),
       },
       availableRolls > 0 ? availableRolls : 1

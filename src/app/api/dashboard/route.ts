@@ -13,9 +13,7 @@ export async function GET() {
     await Promise.all([
       getMaterialBalances(),
       getFinishedGoodsBalances(),
-      prisma.salesOrder.count({
-        where: { status: { in: ["CONFIRMED", "PARTIALLY_DISPATCHED"] } },
-      }),
+      prisma.salesOrder.count(),
       prisma.productionBatch.findMany({
         take: 5,
         orderBy: { createdAt: "desc" },
@@ -42,6 +40,40 @@ export async function GET() {
     totalMetres += fg.metres;
   }
 
+  const mappedBatches = recentBatches.map((b) => ({
+    id: String(b.id),
+    batchNumber: b.batchNumber,
+    rollCount: b.rolls,
+    productionDifferenceKg: Number(b.productionDifferenceKg),
+    specification: {
+      code: b.specification.code,
+    },
+  }));
+
+  const mappedOrders = recentOrders.map((o) => {
+    const isFulfilled = o.dispatchedRolls >= o.orderedRolls;
+    const isCancelled = o.cancelledRolls >= o.orderedRolls;
+    const isPartial = o.dispatchedRolls > 0;
+    const status = isFulfilled
+      ? "FULFILLED"
+      : isCancelled
+      ? "CANCELLED"
+      : isPartial
+      ? "PARTIALLY_DISPATCHED"
+      : "CONFIRMED";
+
+    return {
+      id: String(o.id),
+      orderNumber: o.orderNumber,
+      orderedRolls: o.orderedRolls,
+      dispatchedRolls: o.dispatchedRolls,
+      status,
+      customer: {
+        name: o.customer.name,
+      },
+    };
+  });
+
   return NextResponse.json({
     metrics: {
       rawMaterials,
@@ -53,8 +85,8 @@ export async function GET() {
       },
       openOrdersCount,
     },
-    recentBatches,
-    recentOrders,
+    recentBatches: mappedBatches,
+    recentOrders: mappedOrders,
     recentAudits,
   });
 }

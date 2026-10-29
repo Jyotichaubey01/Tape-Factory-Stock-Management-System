@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
     }
 
     const sessionUser = {
-      id: user.id,
+      id: String(user.id),
       email: user.email,
       name: user.name,
       role: user.role,
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     await logAuditEvent({
       action: "USER_LOGIN",
       entity: "User",
-      entityId: user.id,
+      entityId: String(user.id),
       userId: user.id,
       userRole: user.role,
       ipAddress: req.headers.get("x-forwarded-for") || undefined,
